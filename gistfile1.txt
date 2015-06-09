@@ -1,0 +1,268 @@
+/*
+====Level switch HH LL code using ATtiny85
+Use Normal Core.
+IDE ver 1.0.5
+==============
+ */
+
+#include <MemoryFree.h>
+#define DEBUG
+
+#include <SoftwareSerial.h>
+
+SoftwareSerial TinySerial(1, 0); // RX, TX | Tx=0 maksudnya pin5 diassign sebagai Tx pin.
+
+const int inputStringArraySize = 3;    //buffer size including ending zero.
+char inputString[inputStringArraySize];  //buffer to hold incoming data.
+int inputString_index = 0;
+boolean stringComplete = false;  // whether the string is complete
+
+unsigned long currentMillis = 0;
+unsigned long prevMillis = 0;
+
+int HighLevelPin = 3;      //assign analog input 3 atau hardware pin 2 sebagai masukan sensor HH.
+int LowLevelPin = 2;       //assign analog input 2 atau hardware pin 3 sebagai masukan sensor LL.
+int HighLevelValue = 0;
+int LowLevelValue = 0;
+boolean PermissiveAlarmHigh = 1;    //saat pertama kali power applied (setelah reset), maka logic ini true. akan di false kan oleh 
+                                    //sistem, akibatnya alarm highhigh bunyi terus. untuk membuat true lagi uC harus di reset.
+boolean LowLow = 0;
+int buzzerPin = 2;    //hardware pin 7 diassign untuk buzzer
+int LedPin = 1;       //digital pin 1 or hardware pin 6 diassign sebagai output LED. ini bentrok dgn Rx, tetapi krn Rx tdk digunakan nggak apa apa, mudah2x an bisa..
+  
+//related to SMA_H
+const int numReadings_H = 10;
+int readings_H[numReadings_H];      // the readings from the analog input
+int index_H = 0;                  // the index of the current reading
+int total_H = 0;                  // the running total
+int average_H = 0;                // the average
+
+//related to SMA_L
+const int numReadings_L = 10;
+int readings_L[numReadings_L];      // the readings from the analog input
+int index_L = 0;                  // the index of the current reading
+int total_L = 0;                  // the running total
+int average_L = 0;                // the average
+
+//related to constant value
+int NilaiHigh = 980; 
+int NilaiLow = 980;
+int DelayAlarmHigh = 0;        //tunggu t menit baru high high alarm berbunyi.
+int DelayAlarmLow = 0;         //tunggu t menit baru low low alarm berbunyi.
+int JumlahBuzzerLowOn = 0;
+
+void setup()  
+{
+  OSCCAL = 0x4B; // Oscillator callibration value from Tiny Tuner http://goo.gl/J71XN
+
+  // Open serial communications and let us know we are connected
+  TinySerial.begin(9600);
+  TinySerial.println(F("Ready --> LevelT01.ino"));
+
+  //related to SMA
+  // initialize all the readings to 0:
+  for (int thisReading = 0; thisReading < numReadings_H; thisReading++)
+  readings_H[thisReading] = 0;   
+  //==================================================================
+  pinMode(LedPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+
+//buzzer beep
+    digitalWrite(buzzerPin, HIGH);
+    delay(100);
+    digitalWrite(buzzerPin, LOW);
+}
+
+void loop()
+{
+
+//----------------------------------------------Led Indication
+  if(average_H < NilaiHigh) {
+    digitalWrite(LedPin, HIGH);
+    delay(500);
+    digitalWrite(LedPin, LOW);
+    delay(500);
+  }
+//================================================================
+  
+   if (DelayAlarmHigh >= 75) {         //75 x 4000ms = 300detik = 5 menit. tunggu 5 menit , baru buzzer nyala
+   BuzzerOnHigh(); 
+   delay(500);  
+   }
+  
+  if (stringComplete) {
+    stringComplete = false;
+    
+      if (strcmp(inputString, "L1\n") == 0) {   
+      TinySerial.println(F("L1 Action"));
+      //TinySerial.println(currentMillis);      
+      //action 1     
+      }
+      
+   }
+   
+  if(TinySerial.available())  {
+    char inChar = TinySerial.read();
+
+      if (inputString_index < inputStringArraySize) {  //limit receiving buff size to avoid overwriting of another unalocated memory.
+        // add it to the inputString:
+        inputString[inputString_index++] = inChar;
+      }
+        // if the incoming character is a NEWLINE, set a flag
+        // so the main loop can do something about it:
+        if (inChar == '\n') {
+          stringComplete = true;
+          inputString[inputString_index] = '\0';
+        } 
+  }
+
+    currentMillis = millis();
+    if (currentMillis - prevMillis > 4000) {
+    prevMillis = currentMillis;
+
+    #if defined DEBUG  
+    TinySerial.print(F("free Memory = "));
+    TinySerial.println(freeMemory());  
+    #endif
+
+     TinySerial.print(F("delay alarm high = "));
+     TinySerial.println(DelayAlarmHigh);
+
+     TinySerial.print(F("Permissive Alarm High = "));
+     TinySerial.println(PermissiveAlarmHigh);
+
+     TinySerial.print(F("delay alarm low = "));
+     TinySerial.println(DelayAlarmLow);
+
+
+        //----------------------------------------------Highhigh detection
+        if(average_H < NilaiHigh & PermissiveAlarmHigh == 0) {  
+        DelayAlarmHigh = DelayAlarmHigh + 1;
+        }
+        else {
+        //cancel value DelayAlarmHigh jika ternyata pembacaan sensor non aktif lagi..
+        DelayAlarmHigh = 0;          
+        }
+
+        if(average_H >= 1015) {    //histeris 20 point unt menjaga agar di level interface nggak trigger
+        PermissiveAlarmHigh = 0;        
+        }
+        //==================================================================
+
+
+        //-----------------------------------------------Lowlow detection
+        if(average_L > NilaiLow & average_H > NilaiHigh) {
+        DelayAlarmLow = DelayAlarmLow + 1;       
+        }
+
+
+
+         if( average_L <= 1015) {      //sama dengan atas..
+         DelayAlarmLow = 0;
+         JumlahBuzzerLowOn = 0;
+         }
+
+
+        if (DelayAlarmLow >= 75) {
+             if (JumlahBuzzerLowOn < 20) {
+                 JumlahBuzzerLowOn++; 
+                 BuzzerOnLow(); 
+             }
+         }
+
+        //==================================================================  
+    
+ 
+        HighLevelValue = analogRead(HighLevelPin); //jika terendam air nilai sekitar 548, 852
+        LowLevelValue = analogRead(LowLevelPin);   //jika terendam air nilai sekitar 508, 786
+    
+        TinySerial.print(F("Raw High Level Value = "));
+        TinySerial.println(HighLevelValue);        
+        TinySerial.print(F("SMA High Level Value = "));
+        TinySerial.println(average_H);   
+        
+        TinySerial.print(F("Raw Low Level Value = "));
+        TinySerial.println(LowLevelValue);
+        TinySerial.print(F("SMA Low Level Value = "));
+        TinySerial.println(average_L);  
+
+  //SMA for high level value calculation..
+  // subtract the last reading:
+  total_H= total_H - readings_H[index_H];        
+  // read from the sensor:  
+  readings_H[index_H] = analogRead(HighLevelPin);    
+  // add the reading to the total:
+  total_H= total_H + readings_H[index_H];      
+  // advance to the next position in the array:  
+  index_H = index_H + 1;                    
+
+  // if we're at the end of the array...
+  if (index_H >= numReadings_H)              
+    // ...wrap around to the beginning:
+    index_H = 0;                          
+
+  // calculate the average:
+  average_H = total_H / numReadings_H;        
+//=======================================================
+
+  //SMA for low level value calculation..
+  // subtract the last reading:
+  total_L= total_L - readings_L[index_L];        
+  // read from the sensor:  
+  readings_L[index_L] = analogRead(LowLevelPin);    
+  // add the reading to the total:
+  total_L= total_L + readings_L[index_L];      
+  // advance to the next position in the array:  
+  index_L = index_L + 1;                    
+
+  // if we're at the end of the array...
+  if (index_L >= numReadings_L)              
+    // ...wrap around to the beginning:
+    index_L = 0;                          
+
+  // calculate the average:
+  average_L = total_L / numReadings_L;   
+
+    }
+}
+
+void BuzzerOnHigh(void)
+{
+    digitalWrite(buzzerPin, HIGH);
+    delay(100);
+    digitalWrite(buzzerPin, LOW);
+    delay(50);
+    digitalWrite(buzzerPin, HIGH);
+    delay(100);
+    digitalWrite(buzzerPin, LOW);
+    delay(50);
+    digitalWrite(buzzerPin, HIGH);
+    delay(100);
+    digitalWrite(buzzerPin, LOW);
+    delay(50);
+    digitalWrite(buzzerPin, HIGH);
+    delay(100);
+    digitalWrite(buzzerPin, LOW);
+    delay(50);
+}
+
+void BuzzerOnLow(void)
+{
+    digitalWrite(buzzerPin, HIGH);
+    delay(100);
+    digitalWrite(buzzerPin, LOW);
+    delay(100);
+    digitalWrite(buzzerPin, HIGH);
+    delay(500);
+    digitalWrite(buzzerPin, LOW);
+    delay(100);
+    digitalWrite(buzzerPin, HIGH);
+    delay(50);
+    digitalWrite(buzzerPin, LOW);
+    delay(100);
+    digitalWrite(buzzerPin, HIGH);
+    delay(50);
+    digitalWrite(buzzerPin, LOW);
+    delay(100);
+}
